@@ -42,8 +42,13 @@ screen_x = np.interp(x, [x_min, x_max], [0, self.screen_w])  # Direct mapping
 
 ---
 
-## V2.0 - (Next Version)
-*Coming soon...*
+## V2.0 - Click Actions
+*Problems will be documented here...*
+
+---
+
+## V3.0 - Advanced Actions
+*Problems will be documented here...*
 
 ---
 
