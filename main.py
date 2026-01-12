@@ -2,7 +2,7 @@
 FingerFlow - Hand Gesture Cursor Control
 Control your mouse cursor using hand gestures via webcam
 
-Version 1.0: Basic cursor movement with index finger
+Version 2.0: Added Double Tap, Drag & Drop, Scroll
 Uses MediaPipe Tasks API (0.10.x+)
 """
 
@@ -15,6 +15,156 @@ import urllib.request
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+import math
+
+
+class GestureDetector:
+    """Detects specific hand gestures for actions"""
+    
+    def __init__(self):
+        # Double tap detection
+        self.last_tap_time = 0
+        self.tap_count = 0
+        self.double_tap_threshold = 0.4  # seconds between taps
+        self.pinch_threshold = 40  # pixels distance for pinch
+        self.was_pinched = False
+        
+        # Drag detection
+        self.is_dragging = False
+        self.drag_start_pos = None
+        
+        # Scroll detection
+        self.scroll_mode = False
+        self.last_scroll_y = None
+        self.scroll_sensitivity = 3  # pixels to trigger scroll
+        
+    def calculate_distance(self, p1, p2):
+        """Calculate distance between two points"""
+        return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+    
+    def detect_pinch(self, landmarks):
+        """Detect if thumb and index finger are pinched together"""
+        if len(landmarks) < 21:
+            return False
+        
+        # Get thumb tip (4) and index tip (8)
+        thumb_tip = landmarks[4]
+        index_tip = landmarks[8]
+        
+        distance = self.calculate_distance(
+            (thumb_tip[1], thumb_tip[2]), 
+            (index_tip[1], index_tip[2])
+        )
+        
+        return distance < self.pinch_threshold
+    
+    def detect_double_tap(self, landmarks):
+        """Detect double tap gesture (pinch twice quickly)"""
+        is_pinched = self.detect_pinch(landmarks)
+        current_time = time.time()
+        
+        # Detect pinch start (transition from not pinched to pinched)
+        if is_pinched and not self.was_pinched:
+            time_since_last_tap = current_time - self.last_tap_time
+            
+            if time_since_last_tap < self.double_tap_threshold:
+                self.tap_count += 1
+            else:
+                self.tap_count = 1
+            
+            self.last_tap_time = current_time
+        
+        self.was_pinched = is_pinched
+        
+        # Check if we got a double tap
+        if self.tap_count >= 2:
+            self.tap_count = 0
+            return True
+        
+        return False
+    
+    def detect_single_tap(self, landmarks):
+        """Detect single tap (pinch once)"""
+        is_pinched = self.detect_pinch(landmarks)
+        
+        # Detect pinch release (transition from pinched to not pinched)
+        if not is_pinched and self.was_pinched:
+            self.was_pinched = False
+            return True
+        
+        self.was_pinched = is_pinched
+        return False
+    
+    def detect_grab(self, fingers_status):
+        """Detect grab gesture (closed fist - all fingers down)"""
+        if len(fingers_status) != 5:
+            return False
+        
+        # All fingers should be down (closed fist)
+        # Thumb can be flexible, check other 4 fingers
+        return sum(fingers_status[1:]) <= 1  # At most 1 finger up
+    
+    def detect_open_hand(self, fingers_status):
+        """Detect open hand gesture (all fingers up)"""
+        if len(fingers_status) != 5:
+            return False
+        
+        # At least 4 fingers should be up
+        return sum(fingers_status) >= 4
+    
+    def detect_two_fingers_scroll(self, landmarks, fingers_status):
+        """Detect two-finger scroll gesture (index + middle extended)"""
+        if len(fingers_status) != 5 or len(landmarks) < 21:
+            return None, 0
+        
+        # Check if only index (1) and middle (2) fingers are up
+        # fingers_status: [thumb, index, middle, ring, pinky]
+        index_up = fingers_status[1] == 1
+        middle_up = fingers_status[2] == 1
+        ring_down = fingers_status[3] == 0
+        pinky_down = fingers_status[4] == 0
+        
+        is_scroll_gesture = index_up and middle_up and ring_down and pinky_down
+        
+        if is_scroll_gesture:
+            # Get average Y position of index and middle finger tips
+            index_tip_y = landmarks[8][2]  # (idx, x, y) -> y
+            middle_tip_y = landmarks[12][2]
+            current_y = (index_tip_y + middle_tip_y) / 2
+            
+            if self.last_scroll_y is not None:
+                delta_y = current_y - self.last_scroll_y
+                
+                if abs(delta_y) > self.scroll_sensitivity:
+                    scroll_amount = int(delta_y / self.scroll_sensitivity)
+                    self.last_scroll_y = current_y
+                    return "scroll", scroll_amount
+            
+            self.last_scroll_y = current_y
+            return "scroll_mode", 0
+        else:
+            self.last_scroll_y = None
+            return None, 0
+    
+    def update_drag_state(self, fingers_status, cursor_pos):
+        """Update drag state based on hand gesture"""
+        is_grabbing = self.detect_grab(fingers_status)
+        is_open = self.detect_open_hand(fingers_status)
+        
+        if is_grabbing and not self.is_dragging:
+            # Start dragging
+            self.is_dragging = True
+            self.drag_start_pos = cursor_pos
+            return "drag_start"
+        elif is_open and self.is_dragging:
+            # Stop dragging (drop)
+            self.is_dragging = False
+            self.drag_start_pos = None
+            return "drag_end"
+        elif self.is_dragging:
+            return "dragging"
+        
+        return None
 
 
 class HandTracker:
@@ -233,16 +383,71 @@ class CursorController:
         smooth_x, smooth_y = self.smooth_position(x, y)
         pyautogui.moveTo(smooth_x, smooth_y)
         return smooth_x, smooth_y
+    
+    def click(self):
+        """Perform a single click"""
+        pyautogui.click()
+    
+    def double_click(self):
+        """Perform a double click"""
+        pyautogui.doubleClick()
+    
+    def start_drag(self):
+        """Start dragging (mouse down)"""
+        pyautogui.mouseDown()
+    
+    def end_drag(self):
+        """End dragging (mouse up)"""
+        pyautogui.mouseUp()
+    
+    def scroll(self, amount):
+        """Scroll by amount (negative = up, positive = down)"""
+        pyautogui.scroll(-amount)  # Invert for natural scroll direction
+
+
+def draw_status_panel(frame, gesture_status, is_dragging, scroll_mode):
+    """Draw a status panel showing current gesture state"""
+    h, w, _ = frame.shape
+    
+    # Draw semi-transparent background
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (w - 200, 0), (w, 120), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
+    
+    # Draw status text
+    cv2.putText(frame, "GESTURES:", (w - 190, 25),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    
+    # Drag status
+    drag_color = (0, 255, 0) if is_dragging else (128, 128, 128)
+    drag_text = "DRAGGING" if is_dragging else "Drag: Ready"
+    cv2.putText(frame, drag_text, (w - 190, 50),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.5, drag_color, 1)
+    
+    # Scroll status
+    scroll_color = (0, 255, 255) if scroll_mode else (128, 128, 128)
+    scroll_text = "SCROLL MODE" if scroll_mode else "Scroll: Ready"
+    cv2.putText(frame, scroll_text, (w - 190, 75),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.5, scroll_color, 1)
+    
+    # Last gesture
+    if gesture_status:
+        cv2.putText(frame, f"Last: {gesture_status}", (w - 190, 100),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
 
 def main():
     """Main application loop"""
-    print("=" * 50)
-    print("   FingerFlow - Hand Gesture Cursor Control")
-    print("=" * 50)
-    print("\nControls:")
-    print("  - Move your INDEX FINGER to control the cursor")
-    print("  - Press 'Q' to quit")
+    print("=" * 60)
+    print("   FingerFlow - Hand Gesture Cursor Control v2.0")
+    print("=" * 60)
+    print("\nGestures:")
+    print("  - INDEX FINGER: Move cursor")
+    print("  - PINCH (thumb + index) x2: Double click")
+    print("  - CLOSED FIST: Start drag")
+    print("  - OPEN HAND: Drop (release drag)")
+    print("  - TWO FINGERS (index + middle) UP/DOWN: Scroll")
+    print("\n  - Press 'Q' to quit")
     print("\nStarting camera...")
     
     # Initialize webcam
@@ -255,15 +460,20 @@ def main():
         print("Error: Could not open webcam!")
         return
     
-    # Initialize tracker and controller
+    # Initialize components
     tracker = HandTracker(max_hands=1, detection_confidence=0.7, tracking_confidence=0.7)
     controller = CursorController(smoothing=5)
+    gesture_detector = GestureDetector()
     
     # FPS calculation
     prev_time = time.time()
     fps = 0
     
-    print("Camera started! Move your hand to control the cursor.\n")
+    # Status tracking
+    last_gesture = ""
+    scroll_active = False
+    
+    print("Camera started! Use hand gestures to control the cursor.\n")
     
     try:
         while True:
@@ -280,21 +490,66 @@ def main():
             # Detect hands
             frame = tracker.find_hands(frame, draw=True)
             
-            # Get index finger position
+            # Get landmarks and finger status
+            landmarks = tracker.get_all_landmarks(frame)
+            fingers = tracker.fingers_up(frame)
+            
+            # Get index finger position for cursor
             x, y, found = tracker.get_landmark_position(frame, hand_index=0, landmark_id=tracker.INDEX_TIP)
             
-            if found:
+            if found and len(landmarks) >= 21:
                 # Draw a larger circle on index finger tip
                 cv2.circle(frame, (x, y), 15, (0, 255, 0), cv2.FILLED)
                 cv2.circle(frame, (x, y), 18, (255, 255, 255), 2)
                 
                 # Map to screen and move cursor
                 screen_x, screen_y = controller.map_to_screen(x, y, frame_w, frame_h)
+                
+                # Check for scroll gesture first (two fingers)
+                scroll_action, scroll_amount = gesture_detector.detect_two_fingers_scroll(landmarks, fingers)
+                
+                if scroll_action == "scroll" and scroll_amount != 0:
+                    controller.scroll(scroll_amount)
+                    last_gesture = f"Scroll {'Up' if scroll_amount < 0 else 'Down'}"
+                    scroll_active = True
+                elif scroll_action == "scroll_mode":
+                    scroll_active = True
+                else:
+                    scroll_active = False
+                    
+                    # Check for drag gesture
+                    drag_state = gesture_detector.update_drag_state(fingers, (screen_x, screen_y))
+                    
+                    if drag_state == "drag_start":
+                        controller.start_drag()
+                        last_gesture = "Drag Start"
+                        print("🖐️ Drag started!")
+                    elif drag_state == "drag_end":
+                        controller.end_drag()
+                        last_gesture = "Dropped!"
+                        print("✋ Dropped!")
+                    elif drag_state == "dragging":
+                        # Continue moving while dragging
+                        pass
+                    else:
+                        # Check for double tap (only when not dragging/scrolling)
+                        if gesture_detector.detect_double_tap(landmarks):
+                            controller.double_click()
+                            last_gesture = "Double Click!"
+                            print("👆👆 Double clicked!")
+                
+                # Move cursor (always, for both normal and drag mode)
                 final_x, final_y = controller.move_cursor(screen_x, screen_y)
                 
                 # Display cursor position
                 cv2.putText(frame, f"Cursor: ({final_x}, {final_y})", (10, 70),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                
+                # Display finger status
+                finger_names = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+                finger_str = " ".join([f"{n[0]}:{f}" for n, f in zip(finger_names, fingers)])
+                cv2.putText(frame, f"Fingers: {finger_str}", (10, 100),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
             
             # Calculate and display FPS
             current_time = time.time()
@@ -310,8 +565,11 @@ def main():
             cv2.putText(frame, status, (10, frame_h - 20),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
             
+            # Draw gesture status panel
+            draw_status_panel(frame, last_gesture, gesture_detector.is_dragging, scroll_active)
+            
             # Show frame
-            cv2.imshow("FingerFlow - Hand Gesture Control", frame)
+            cv2.imshow("FingerFlow v2.0 - Hand Gesture Control", frame)
             
             # Check for quit
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -321,6 +579,10 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted by user...")
     finally:
+        # Ensure drag is released
+        if gesture_detector.is_dragging:
+            controller.end_drag()
+        
         # Cleanup
         tracker.release()
         cap.release()
