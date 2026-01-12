@@ -208,8 +208,9 @@ class CursorController:
         x = max(x_min, min(x, x_max))
         y = max(y_min, min(y, y_max))
         
-        # Map to screen coordinates (mirror x-axis for natural movement)
-        screen_x = np.interp(x, [x_min, x_max], [self.screen_w, 0])
+        # Map to screen coordinates (direct mapping for natural movement)
+        # Since frame is already flipped, no need to invert X-axis
+        screen_x = np.interp(x, [x_min, x_max], [0, self.screen_w])
         screen_y = np.interp(y, [y_min, y_max], [0, self.screen_h])
         
         return int(screen_x), int(screen_y)
