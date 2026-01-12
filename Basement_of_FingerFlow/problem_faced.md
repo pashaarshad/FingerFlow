@@ -42,12 +42,58 @@ screen_x = np.interp(x, [x_min, x_max], [0, self.screen_w])  # Direct mapping
 
 ---
 
-## V2.0 - Click Actions
-*Problems will be documented here...*
+## V2.0 - Gesture Actions
+
+### Problem 2: Scroll Required Moving Whole Hand ❌➡️✅
+**Date:** 2026-01-12
+
+**Problem Description:**
+The scroll gesture was only working when the user moved their **entire hand** up or down. It was not responding to **finger movement/swipes** like on a phone touchscreen.
+
+**Expected Behavior:**
+- Keep hand in same position
+- Just move two fingers up/down (like swiping on phone)
+- Scroll should work based on finger motion
+
+**Actual Behavior (Bug):**
+- Had to move the entire hand up/down to trigger scroll
+- Finger swipe motion was not detected
+- Very inconvenient for scrolling YouTube reels, etc.
+
+**Root Cause:**
+The scroll detection was tracking the **absolute Y position** of the fingers. When the hand stayed still, even if fingers moved, the absolute position didn't change enough to trigger scroll.
+
+**Code Before (Bug):**
+```python
+if abs(delta_y) > self.scroll_sensitivity:
+    scroll_amount = int(delta_y / self.scroll_sensitivity)
+    # This only worked when whole hand moved
+```
+
+**Solution:**
+Changed scroll detection to track **relative finger movement** with:
+1. Movement history (last 3 frames)
+2. Average delta calculation for smoother detection
+3. Reduced sensitivity threshold (2 pixels)
+4. Better scaling of scroll amount
+
+```python
+# Add to history for smoothing (keep last 3 frames)
+self.scroll_history.append(delta_y)
+
+# Calculate average movement direction
+avg_delta = sum(self.scroll_history) / len(self.scroll_history)
+
+# Trigger scroll if movement is significant
+if abs(avg_delta) > 2:  # Lower threshold
+    scroll_amount = int(avg_delta / 2)
+```
+
+**Status:** ✅ SOLVED
 
 ---
 
-## V3.0 - Advanced Actions
+## V3.0 - (Future)
 *Problems will be documented here...*
 
 ---

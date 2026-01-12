@@ -113,8 +113,15 @@ class GestureDetector:
         return sum(fingers_status) >= 4
     
     def detect_two_fingers_scroll(self, landmarks, fingers_status):
-        """Detect two-finger scroll gesture (index + middle extended)"""
+        """Detect two-finger scroll gesture (index + middle extended)
+        
+        Scroll is triggered by the MOVEMENT of fingers (like a swipe), 
+        not by moving the whole hand. Even if hand stays in same position,
+        moving fingers up/down will scroll.
+        """
         if len(fingers_status) != 5 or len(landmarks) < 21:
+            self.last_scroll_y = None
+            self.scroll_history = []
             return None, 0
         
         # Check if only index (1) and middle (2) fingers are up
@@ -132,13 +139,29 @@ class GestureDetector:
             middle_tip_y = landmarks[12][2]
             current_y = (index_tip_y + middle_tip_y) / 2
             
+            # Initialize scroll history if needed
+            if not hasattr(self, 'scroll_history'):
+                self.scroll_history = []
+            
             if self.last_scroll_y is not None:
+                # Calculate movement delta
                 delta_y = current_y - self.last_scroll_y
                 
-                if abs(delta_y) > self.scroll_sensitivity:
-                    scroll_amount = int(delta_y / self.scroll_sensitivity)
-                    self.last_scroll_y = current_y
-                    return "scroll", scroll_amount
+                # Add to history for smoothing (keep last 3 frames)
+                self.scroll_history.append(delta_y)
+                if len(self.scroll_history) > 3:
+                    self.scroll_history.pop(0)
+                
+                # Calculate average movement direction
+                avg_delta = sum(self.scroll_history) / len(self.scroll_history)
+                
+                # Trigger scroll if movement is significant (lowered threshold)
+                if abs(avg_delta) > 2:  # Reduced sensitivity threshold
+                    # Scale the scroll amount based on movement speed
+                    scroll_amount = int(avg_delta / 2)
+                    if scroll_amount != 0:
+                        self.last_scroll_y = current_y
+                        return "scroll", scroll_amount
             
             self.last_scroll_y = current_y
             return "scroll_mode", 0
