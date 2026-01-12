@@ -366,9 +366,14 @@ class HandTracker:
 
 
 class CursorController:
-    """Handles smooth cursor movement and screen coordinate mapping"""
+    """Handles smooth cursor movement and screen coordinate mapping
     
-    def __init__(self, smoothing=5):
+    Supports two modes:
+    - DIRECT: Finger position maps directly to screen position
+    - JOYSTICK: Finger direction controls cursor velocity (like a joystick)
+    """
+    
+    def __init__(self, smoothing=7, mode="joystick"):
         # Get screen dimensions
         self.screen_w, self.screen_h = pyautogui.size()
         
@@ -376,16 +381,38 @@ class CursorController:
         pyautogui.FAILSAFE = False
         pyautogui.PAUSE = 0
         
-        # Smoothing buffer
+        # Control mode: "direct" or "joystick"
+        self.mode = mode
+        
+        # Smoothing buffer (increased for smoother movement)
         self.smoothing = smoothing
-        self.prev_x, self.prev_y = 0, 0
         self.position_buffer = []
         
-        # Frame reduction zone (percentage from edges to ignore)
-        self.frame_reduction = 0.15
+        # Current cursor position (for joystick mode)
+        self.cursor_x = self.screen_w // 2
+        self.cursor_y = self.screen_h // 2
         
-    def map_to_screen(self, x, y, frame_w, frame_h):
-        """Map camera coordinates to screen coordinates with zone reduction"""
+        # Joystick mode settings
+        self.dead_zone = 0.15  # Center zone where cursor doesn't move
+        self.max_speed = 25  # Maximum cursor movement speed (pixels per frame)
+        self.acceleration = 1.5  # How quickly cursor accelerates
+        
+        # Frame reduction zone (percentage from edges to ignore)
+        self.frame_reduction = 0.1
+        
+        # Reference center point (will be set when hand is first detected)
+        self.center_x = None
+        self.center_y = None
+        self.calibrated = False
+        
+    def calibrate_center(self, x, y, frame_w, frame_h):
+        """Set the center reference point for joystick mode"""
+        self.center_x = frame_w // 2
+        self.center_y = frame_h // 2
+        self.calibrated = True
+        
+    def map_to_screen_direct(self, x, y, frame_w, frame_h):
+        """Direct mapping: finger position = screen position"""
         # Calculate the active zone
         x_min = int(frame_w * self.frame_reduction)
         x_max = int(frame_w * (1 - self.frame_reduction))
@@ -396,12 +423,57 @@ class CursorController:
         x = max(x_min, min(x, x_max))
         y = max(y_min, min(y, y_max))
         
-        # Map to screen coordinates (direct mapping for natural movement)
-        # Since frame is already flipped, no need to invert X-axis
+        # Map to screen coordinates
         screen_x = np.interp(x, [x_min, x_max], [0, self.screen_w])
         screen_y = np.interp(y, [y_min, y_max], [0, self.screen_h])
         
         return int(screen_x), int(screen_y)
+    
+    def map_to_screen_joystick(self, x, y, frame_w, frame_h):
+        """Joystick mapping: finger direction controls cursor velocity"""
+        if not self.calibrated:
+            self.calibrate_center(x, y, frame_w, frame_h)
+        
+        # Calculate offset from center (normalized -1 to 1)
+        offset_x = (x - self.center_x) / (frame_w * 0.4)  # 40% of frame width = full speed
+        offset_y = (y - self.center_y) / (frame_h * 0.4)
+        
+        # Clamp to -1 to 1
+        offset_x = max(-1, min(1, offset_x))
+        offset_y = max(-1, min(1, offset_y))
+        
+        # Apply dead zone (center area where cursor doesn't move)
+        if abs(offset_x) < self.dead_zone:
+            offset_x = 0
+        else:
+            # Rescale to remove dead zone
+            offset_x = (offset_x - np.sign(offset_x) * self.dead_zone) / (1 - self.dead_zone)
+        
+        if abs(offset_y) < self.dead_zone:
+            offset_y = 0
+        else:
+            offset_y = (offset_y - np.sign(offset_y) * self.dead_zone) / (1 - self.dead_zone)
+        
+        # Apply acceleration curve (exponential for finer control)
+        velocity_x = np.sign(offset_x) * (abs(offset_x) ** self.acceleration) * self.max_speed
+        velocity_y = np.sign(offset_y) * (abs(offset_y) ** self.acceleration) * self.max_speed
+        
+        # Update cursor position
+        self.cursor_x += velocity_x
+        self.cursor_y += velocity_y
+        
+        # Clamp to screen bounds
+        self.cursor_x = max(0, min(self.screen_w - 1, self.cursor_x))
+        self.cursor_y = max(0, min(self.screen_h - 1, self.cursor_y))
+        
+        return int(self.cursor_x), int(self.cursor_y)
+    
+    def map_to_screen(self, x, y, frame_w, frame_h):
+        """Map camera coordinates to screen coordinates based on current mode"""
+        if self.mode == "joystick":
+            return self.map_to_screen_joystick(x, y, frame_w, frame_h)
+        else:
+            return self.map_to_screen_direct(x, y, frame_w, frame_h)
     
     def smooth_position(self, x, y):
         """Apply smoothing to reduce jitter"""
@@ -410,9 +482,18 @@ class CursorController:
         if len(self.position_buffer) > self.smoothing:
             self.position_buffer.pop(0)
         
-        # Calculate average position
-        avg_x = int(sum(p[0] for p in self.position_buffer) / len(self.position_buffer))
-        avg_y = int(sum(p[1] for p in self.position_buffer) / len(self.position_buffer))
+        # Calculate weighted average (recent positions weighted more)
+        total_weight = 0
+        avg_x = 0
+        avg_y = 0
+        for i, (px, py) in enumerate(self.position_buffer):
+            weight = i + 1  # Later positions get more weight
+            avg_x += px * weight
+            avg_y += py * weight
+            total_weight += weight
+        
+        avg_x = int(avg_x / total_weight)
+        avg_y = int(avg_y / total_weight)
         
         return avg_x, avg_y
     
@@ -474,13 +555,62 @@ def draw_status_panel(frame, gesture_status, is_dragging, scroll_mode):
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
 
+def draw_joystick_guide(frame, finger_x, finger_y, controller):
+    """Draw a visual joystick guide showing center and finger direction"""
+    h, w, _ = frame.shape
+    center_x = w // 2
+    center_y = h // 2
+    
+    # Draw center crosshair (dead zone indicator)
+    dead_zone_radius = int(w * controller.dead_zone * 0.4)
+    
+    # Draw dead zone circle (semi-transparent)
+    overlay = frame.copy()
+    cv2.circle(overlay, (center_x, center_y), dead_zone_radius, (100, 100, 100), -1)
+    cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+    
+    # Draw dead zone outline
+    cv2.circle(frame, (center_x, center_y), dead_zone_radius, (200, 200, 200), 2)
+    
+    # Draw center point
+    cv2.circle(frame, (center_x, center_y), 5, (255, 255, 255), -1)
+    
+    # Draw crosshairs
+    cv2.line(frame, (center_x - 20, center_y), (center_x + 20, center_y), (150, 150, 150), 1)
+    cv2.line(frame, (center_x, center_y - 20), (center_x, center_y + 20), (150, 150, 150), 1)
+    
+    # Draw direction line from center to finger
+    if finger_x is not None and finger_y is not None:
+        # Calculate distance from center
+        dist = math.sqrt((finger_x - center_x)**2 + (finger_y - center_y)**2)
+        
+        if dist > dead_zone_radius:
+            # Draw line showing direction
+            cv2.line(frame, (center_x, center_y), (finger_x, finger_y), (0, 255, 0), 2)
+            
+            # Draw arrow head
+            angle = math.atan2(finger_y - center_y, finger_x - center_x)
+            arrow_len = 15
+            cv2.arrowedLine(frame, 
+                           (center_x, center_y), 
+                           (finger_x, finger_y),
+                           (0, 255, 0), 2, tipLength=0.15)
+    
+    # Draw mode label
+    cv2.putText(frame, "JOYSTICK MODE", (center_x - 60, 25),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+
+
 def main():
     """Main application loop"""
     print("=" * 60)
-    print("   FingerFlow - Hand Gesture Cursor Control v2.0")
+    print("   FingerFlow - Hand Gesture Cursor Control v2.1")
     print("=" * 60)
+    print("\n🕹️ JOYSTICK MODE: Point finger in direction to move cursor")
+    print("   - Center = Stop | Tilt direction = Move that way")
+    print("   - Small movements = Slow | Large movements = Fast")
     print("\nGestures:")
-    print("  - INDEX FINGER: Move cursor")
+    print("  - INDEX FINGER: Control cursor direction")
     print("  - PINCH (thumb + index) x1: Single click")
     print("  - PINCH (thumb + index) x2: Double click")
     print("  - CLOSED FIST: Start drag")
@@ -613,8 +743,14 @@ def main():
             # Draw gesture status panel
             draw_status_panel(frame, last_gesture, gesture_detector.is_dragging, scroll_active)
             
+            # Draw joystick guide if in joystick mode
+            if controller.mode == "joystick":
+                finger_x = x if found else None
+                finger_y = y if found else None
+                draw_joystick_guide(frame, finger_x, finger_y, controller)
+            
             # Show frame
-            cv2.imshow("FingerFlow v2.0 - Hand Gesture Control", frame)
+            cv2.imshow("FingerFlow v2.1 - Joystick Mode", frame)
             
             # Check for quit
             if cv2.waitKey(1) & 0xFF == ord('q'):
