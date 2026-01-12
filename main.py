@@ -22,12 +22,15 @@ class GestureDetector:
     """Detects specific hand gestures for actions"""
     
     def __init__(self):
-        # Double tap detection
-        self.last_tap_time = 0
-        self.tap_count = 0
-        self.double_tap_threshold = 0.4  # seconds between taps
+        # Tap detection (single and double click)
+        self.last_pinch_time = 0
+        self.pinch_count = 0
+        self.double_tap_threshold = 0.35  # seconds between taps for double-click
+        self.click_delay = 0.25  # wait time before registering single click
         self.pinch_threshold = 40  # pixels distance for pinch
         self.was_pinched = False
+        self.pending_single_click = False
+        self.pending_click_time = 0
         
         # Drag detection
         self.is_dragging = False
@@ -58,42 +61,54 @@ class GestureDetector:
         
         return distance < self.pinch_threshold
     
-    def detect_double_tap(self, landmarks):
-        """Detect double tap gesture (pinch twice quickly)"""
+    def detect_click(self, landmarks):
+        """
+        Detect single or double click based on pinch gesture.
+        
+        Returns:
+            - "single_click" if single pinch detected
+            - "double_click" if two quick pinches detected
+            - None if no click action
+        """
         is_pinched = self.detect_pinch(landmarks)
         current_time = time.time()
         
-        # Detect pinch start (transition from not pinched to pinched)
+        # Detect pinch START (transition from not pinched to pinched)
         if is_pinched and not self.was_pinched:
-            time_since_last_tap = current_time - self.last_tap_time
+            time_since_last_pinch = current_time - self.last_pinch_time
             
-            if time_since_last_tap < self.double_tap_threshold:
-                self.tap_count += 1
+            if time_since_last_pinch < self.double_tap_threshold:
+                # Second pinch within threshold = double click!
+                self.pinch_count = 0
+                self.pending_single_click = False
+                self.was_pinched = is_pinched
+                self.last_pinch_time = current_time
+                return "double_click"
             else:
-                self.tap_count = 1
+                # First pinch - mark as pending single click
+                self.pinch_count = 1
+                self.pending_single_click = True
+                self.pending_click_time = current_time
             
-            self.last_tap_time = current_time
+            self.last_pinch_time = current_time
+        
+        # Detect pinch RELEASE (transition from pinched to not pinched)
+        elif not is_pinched and self.was_pinched:
+            # Pinch released, check if we should trigger single click
+            pass
         
         self.was_pinched = is_pinched
         
-        # Check if we got a double tap
-        if self.tap_count >= 2:
-            self.tap_count = 0
-            return True
+        # Check if pending single click should be triggered
+        # (waited long enough without second pinch)
+        if self.pending_single_click and not is_pinched:
+            if current_time - self.pending_click_time > self.click_delay:
+                self.pending_single_click = False
+                self.pinch_count = 0
+                return "single_click"
         
-        return False
-    
-    def detect_single_tap(self, landmarks):
-        """Detect single tap (pinch once)"""
-        is_pinched = self.detect_pinch(landmarks)
-        
-        # Detect pinch release (transition from pinched to not pinched)
-        if not is_pinched and self.was_pinched:
-            self.was_pinched = False
-            return True
-        
-        self.was_pinched = is_pinched
-        return False
+        return None
+
     
     def detect_grab(self, fingers_status):
         """Detect grab gesture (closed fist - all fingers down)"""
@@ -466,6 +481,7 @@ def main():
     print("=" * 60)
     print("\nGestures:")
     print("  - INDEX FINGER: Move cursor")
+    print("  - PINCH (thumb + index) x1: Single click")
     print("  - PINCH (thumb + index) x2: Double click")
     print("  - CLOSED FIST: Start drag")
     print("  - OPEN HAND: Drop (release drag)")
@@ -555,8 +571,14 @@ def main():
                         # Continue moving while dragging
                         pass
                     else:
-                        # Check for double tap (only when not dragging/scrolling)
-                        if gesture_detector.detect_double_tap(landmarks):
+                        # Check for click gestures (only when not dragging/scrolling)
+                        click_action = gesture_detector.detect_click(landmarks)
+                        
+                        if click_action == "single_click":
+                            controller.click()
+                            last_gesture = "Click!"
+                            print("👆 Clicked!")
+                        elif click_action == "double_click":
                             controller.double_click()
                             last_gesture = "Double Click!"
                             print("👆👆 Double clicked!")

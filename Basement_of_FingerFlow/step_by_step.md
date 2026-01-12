@@ -40,28 +40,33 @@ A log of all features implemented in each version.
 
 ### Features Implemented:
 
-1. ✅ **Double Tap (Click)** - Pinch twice quickly
+1. ✅ **Single Click** - Pinch once
    - Bring thumb and index finger together (pinch)
-   - Do it twice within 0.4 seconds
+   - Release to trigger single click
+   - Wait 0.25s to distinguish from double-click
+
+2. ✅ **Double Click** - Pinch twice quickly
+   - Bring thumb and index finger together (pinch)
+   - Do it twice within 0.35 seconds
    - Triggers a double-click at cursor position
 
-2. ✅ **Drag & Drop** - Grab and release
+3. ✅ **Drag & Drop** - Grab and release
    - **Grab (Close Fist)**: All fingers closed → Starts dragging
    - **Drop (Open Hand)**: All fingers open → Releases/drops
    - Cursor continues moving while dragging
 
-3. ✅ **Two-Finger Scroll** - Swipe up/down
+4. ✅ **Two-Finger Scroll** - Swipe up/down
    - Extend only index + middle fingers (✌️ gesture)
-   - Move fingers UP → Scroll UP
+   - Move fingers UP → Scroll UP (like swiping on phone)
    - Move fingers DOWN → Scroll DOWN
-   - Other fingers must be closed
+   - Works with finger motion, not just hand movement
 
-4. ✅ **Status Panel** - Visual feedback
+5. ✅ **Status Panel** - Visual feedback
    - Shows current drag state
    - Shows scroll mode status
    - Shows last gesture performed
 
-5. ✅ **Finger Status Display** - Debug info
+6. ✅ **Finger Status Display** - Debug info
    - Shows which fingers are up/down
    - Format: T:1 I:1 M:0 R:0 P:0
 
@@ -72,6 +77,7 @@ A log of all features implemented in each version.
 | Gesture | Action | Description |
 |---------|--------|-------------|
 | ☝️ Move Index | Move Cursor | Point with index finger |
+| 👌 Pinch x1 | Single Click | Thumb + index together, once |
 | 👌👌 Pinch x2 | Double Click | Thumb + index together, twice |
 | ✊ Closed Fist | Start Drag | Close all fingers |
 | 🖐️ Open Hand | Drop | Open all fingers |
@@ -83,7 +89,6 @@ A log of all features implemented in each version.
 *Coming soon...*
 
 ### Planned Features:
-- [ ] Single click gesture
 - [ ] Right-click gesture
 - [ ] Gesture sensitivity settings
 - [ ] Configuration file
@@ -95,5 +100,5 @@ A log of all features implemented in each version.
 | Version | Features | Status |
 |---------|----------|--------|
 | V1.0 | Cursor movement, Hand detection | ✅ Complete |
-| V2.0 | Double tap, Drag & Drop, Scroll | ✅ Complete |
+| V2.0 | Single/Double click, Drag & Drop, Scroll | ✅ Complete |
 | V3.0 | Right-click, Settings | 🔄 Planned |
